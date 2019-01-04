@@ -1,0 +1,116 @@
+#!/usr/bin/python
+import numbers, sys, os , re
+from datetime import date, datetime
+from time import mktime, strptime
+from dateutil.relativedelta import relativedelta
+from timeit import default_timer as timer
+
+start = timer()
+
+utf8 = "export LANG=en_US.UTF-8;"
+#print "utf8:",utf8 
+rv_utf8 = os.system(utf8)
+
+cinit = "kinit -kt /nfs/projects/sbg_analytics/keytab_1/sys_sbg_analytics.keytab sys_sbg_analytics;"
+#print "cinit:", cinit
+rv_cinit = os.system(cinit)
+
+c = "/nfs/projects/sbg_analytics/care_analytics/sh/gvincent-admin/logs/"
+q = '"'
+v_login = "/opt/vertica/bin/vsql -k sbgverticatest -K sbg-vertica01-test.intuit.net -h sbg-vertica01-test.intuit.net -U sys_sbg_analytics "
+
+tbls_list = [line.strip() for line in open(sys.argv[1], 'r')]
+for i in range(len(tbls_list)) :
+	#print "line 0:", tbls_list[i].split(" ")[0]
+	#print "line 0:", tbls_list[i].split(" ")[1]
+	#print "line 0:", tbls_list[i].split(" ")[0].split(".")[0]
+	#print "line 0:", tbls_list[i].split(" ")[0].split(".")[1]
+
+	s_db = tbls_list[i].split(" ")[0].split(".")[0]
+	tbl = tbls_list[i].split(" ")[0].split(".")[1]
+	t_db = tbls_list[i].split(" ")[1]
+	tbl_log = c + tbl + '_' + str(start) + '_' + ".log"
+	tbl_excp_log = c + tbl + '_' +'excp'+ '_' + str(start) + ".log"
+	tbl_reject_log = c + tbl + '_' +'reject'+ '_' + str(start) + ".log"
+	vldn_log = c + tbl + '_' + str(start) + "_vldn.log"
+
+	dt = "hive -e " + q + 'describe ' + s_db + '.' + tbl + ';' + q + ' > ' + c + tbl + '.ddl'
+	#print "dt:", dt 
+	rv_dt = os.system(dt)
+	clean_dt = "sed -i '/WARN:/d' " + c + tbl + '.ddl'
+	rv_clean_dt = os.system(clean_dt)
+		
+	clean_dt_2 = "sed -i '/col_name/d' " + c + tbl + '.ddl'
+	rv_clean_dt_2 = os.system(clean_dt_2)
+	
+	i_sql = ' '
+	c_sql = 'select count(*), '
+	data = [line.strip() for line in open(c + tbl + '.ddl' , 'r')]
+	#print "line 0:", data[0].split(" ")[0]
+	for i in range(len(data)) :
+		#i_sql = i_sql +  "regexp_replace("  + data[i].split('\t')[0].strip() + ", '^[^a-zA-Z0-9\\s]+|[^a-zA-Z0-9\\s]+\t', ''),"
+		i_sql = i_sql +  "regexp_replace("  + data[i].split('\t')[0].strip() + ", '\t', ''),"
+		if  re.match(r'decimal', data[i].split('\t')[1]):
+	 		c_sql = c_sql + 'sum(' + data[i].split('\t')[0].strip() + '),' 
+	 		#print (i, data[i].split('\t')[0])
+	i_sql = i_sql[:-1]
+	#print ('i_sql:', i_sql)
+	c_sql = c_sql[:-1]
+	#print ('c_sql:', c_sql)
+	c1 = "sed -i -e 's/^/, /' " + c + tbl + '.ddl'
+	#print "c1:", c1
+	rv_c1 = os.system(c1)
+
+	c2 = "sed -i -r '1 s/^[, ]/ /' " + c + tbl + '.ddl'
+	#print "c2:", c2
+	rv_c2 = os.system(c2)
+
+	#c2_d = "sed -i -e 's/decimal(38,9)/decimal(38,15)/' " + tbl + '.ddl'
+	##print "c2_d:", c2_d
+	#rv_c2_d = os.system(c2_d)
+
+	c3 = "sed -i -e 's/string/varchar/g' " + c + tbl + '.ddl'
+	#print "c3:", c3
+	rv_c3 = os.system(c3)
+
+	c4 = "sed -i -e '1 i CREATE TABLE IF NOT EXISTS " + t_db + '.' + tbl + " (' " + c + tbl + '.ddl'
+	#print "c4:", c4
+	rv_c4 = os.system(c4)
+
+	c5 = "sed -i -e '$ a );' "+ c + tbl + '.ddl'
+	#print "c5:", c5 
+	rv_c5 = os.system(c5)
+
+	#/opt/vertica/bin/vsql -k ideavertica -K idea-vertica01.intuit.net -h sbg-vertica01-prd.intuit.net -U sys_sbg_analytics -f DIM_FVOC_RESPONSE.ddl
+	ct = utf8 + cinit + v_login + '-f ' + c + tbl + '.ddl'
+	#print "ct:", ct
+	rv_ct = os.system(ct)
+
+	#/opt/vertica/bin/vsql -k ideavertica -K idea-vertica01.intuit.net -h sbg-vertica01-prd.intuit.net -U sys_sbg_analytics -c "\d SBG_SANDBOX.DIM_FVOC_RESPONSE;"
+
+	#/opt/vertica/bin/vsql -k ideavertica -K idea-vertica01.intuit.net -h sbg-vertica01-prd.intuit.net -U sys_sbg_analytics -c "truncate table sbg_sandbox.dim_fvoc_response;" -v ON_ERROR_STOP=no
+	tt = utf8 + cinit + v_login + '-c ' + q +'truncate table ' + t_db + '.' + tbl +';' + q + ' -v ON_ERROR_STOP=no'
+	#print "tt:", tt
+	rv_tt = os.system(tt)
+
+	#hive -e "set mapred.job.queue.name=root.mr.sbg.adhoc; select * FROM ent_care_psa.dim_fvoc_response" | dd bs=1M | /opt/vertica/bin/vsql -k ideavertica -K idea-vertica01.intuit.net -h sbg-vertica01-prd.intuit.net -U sys_sbg_analytics -c "COPY SBG_SANDBOX.DIM_FVOC_RESPONSE FROM LOCAL STDIN DELIMITER E'\t' NULL 'NULL' DIRECT"
+	lt = utf8 + cinit + 'hive -e ' + q + 'set mapred.job.queue.name=root.mr.sbg.adhoc; select ' + i_sql +'  FROM ' + s_db + '.' + tbl + q + '| dd bs=1M | ' +  v_login + '-c ' + q + 'COPY ' + t_db + '.' + tbl + " FROM LOCAL STDIN DELIMITER E'\t' NULL 'NULL' DIRECT EXCEPTIONS '" + tbl_excp_log +"' " + "REJECTED DATA '" + tbl_reject_log + "' " + q 
+#+ " > /nfs/projects/sbg_analytics/care_analytics/sh/gvincent-admin/logs/"  + tbl_log +  2>&1 "; "chmod 775 /nfs/projects/sbg_analytics/care_analytics/sh/gvincent-admin/logs/" + tbl_log;  
+	print "lt:", lt
+	rv_lt = os.system(lt)
+
+	#/opt/vertica/bin/vsql -k ideavertica -K idea-vertica01.intuit.net -h sbg-vertica01-prd.intuit.net -U sys_sbg_analytics -c "GRANT ALL ON SBG_SANDBOX.dim_fvoc_response TO SBG_ETL,SBG_ANALYST, SBG_RPT,SYS_SBG_ANALYTICS;"
+	gc = utf8 + v_login + '-c' + q + "GRANT ALL ON " + t_db  + '.' + tbl  + " TO SBG_ETL,SBG_ANALYST, SBG_RPT,SYS_SBG_ANALYTICS;" + q 
+	rv_gc = os.system(gc)
+	#print "gc:", gc
+
+	h_sql = c_sql + ' from ' + s_db + '.' + tbl + ';'
+	h_ck = 'hive -e ' + q + 'set mapred.job.queue.name=root.mr.sbg.adhoc;' + h_sql + q
+	print "h_ck:", h_ck
+	rv_h_ck = os.system(h_ck)
+
+	v_sql = c_sql + ' from ' + t_db + '.' + tbl + ';'
+	#print "v_sql:", v_sql
+	v_ck = utf8 + cinit + v_login + '-c ' + q + v_sql + q
+	#print "v_ck:", v_ck
+	rv_v_ck = os.system(v_ck)
